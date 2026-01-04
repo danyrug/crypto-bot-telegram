@@ -1,0 +1,30 @@
+name: Crypto Bot Orario
+
+on:
+  schedule:
+    # Esegue ogni ora al minuto 0 (es: 13:00, 14:00, ecc.)
+    - cron: '0 * * * *'
+  workflow_dispatch: # Permette di avviarlo a mano per testare
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Scarica il codice
+        uses: actions/checkout@v3
+
+      - name: Imposta Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Installa librerie
+        run: |
+          pip install -r requirements.txt
+
+      - name: Esegui il bot
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python bot.py
