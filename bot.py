@@ -7,7 +7,7 @@ from datetime import datetime
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-# Fallback per test locale
+# Fallback
 if not TELEGRAM_TOKEN:
     TELEGRAM_TOKEN = "8504447951:AAHkFvYwK_A2k76gendESC41-a2u03pQ7-c"
 if not CHAT_ID:
@@ -17,7 +17,6 @@ CRYPTO_IDS = ["bitcoin", "ethereum", "solana", "ripple", "cardano", "polkadot"]
 VALUTA = "eur"
 
 def get_current_prices():
-    """Recupera i prezzi attuali e la variazione 24h"""
     url = "https://api.coingecko.com/api/v3/simple/price"
     params = {
         "ids": ",".join(CRYPTO_IDS),
@@ -33,7 +32,6 @@ def get_current_prices():
         return None
 
 def get_rsi(crypto_id):
-    """Calcola l'RSI a 14 giorni recuperando lo storico"""
     url = f"https://api.coingecko.com/api/v3/coins/{crypto_id}/market_chart"
     params = {
         "vs_currency": VALUTA,
@@ -47,19 +45,16 @@ def get_rsi(crypto_id):
         data = response.json()
         prices = [x[1] for x in data['prices']]
         
-        # Se non abbiamo abbastanza dati, usciamo
         if len(prices) < 14:
             return None
 
-        # Calcolo RSI (Formula standard)
+        # Calcolo RSI
         deltas = [prices[i+1] - prices[i] for i in range(len(prices)-1)]
         gains = [d for d in deltas if d > 0]
         losses = [-d for d in deltas if d < 0]
 
-        if len(losses) == 0:
-            return 100 # Prezzo sempre salito
-        if len(gains) == 0:
-            return 0   # Prezzo sempre sceso
+        if len(losses) == 0: return 100
+        if len(gains) == 0: return 0
 
         avg_gain = sum(gains) / 14
         avg_loss = sum(losses) / 14
@@ -98,18 +93,18 @@ def main():
 
     for crypto in CRYPTO_IDS:
         if crypto in prices_data:
-            # Dati base
             price = prices_data[crypto][VALUTA]
             change_24h = prices_data[crypto].get(f"{VALUTA}_24h_change", 0)
             
-            # Calcolo RSI (lento, facciamo una pausa)
+            # --- MODIFICA QUI ---
+            # Pausa aumentata a 15 secondi per evitare il blocco API
+            print(f"Calcolo RSI per {crypto}...") 
+            time.sleep(15) 
             rsi = get_rsi(crypto)
-            time.sleep(1) # Pausa di 1 secondo per non bloccare l'API
-            
-            # Logica Emoji Prezzo
+            # --------------------
+
             emoji_trend = "🟢" if change_24h >= 0 else "🔴"
             
-            # Logica Segnali RSI
             rsi_text = ""
             if rsi is not None:
                 if rsi <= 30:
@@ -117,9 +112,12 @@ def main():
                 elif rsi >= 70:
                     rsi_text = f"\n🔥 **SELL SIGNAL!** RSI {rsi:.0f} (Ipercomprato)"
                 else:
-                    rsi_text = f" | RSI: {rsi:.0f}" # Neutro
+                    rsi_text = f" | RSI: {rsi:.0f}"
+            
+            # Se l'RSI fallisce ancora, metti un avviso
+            if rsi is None:
+                rsi_text = " | RSI: N/A (Errore API)"
 
-            # Composizione Messaggio
             message += f"🔹 *{crypto.capitalize()}*\n"
             message += f"💶 € {price:,.2f} ({emoji_trend} {change_24h:+.2f}%)"
             message += f"{rsi_text}\n\n"
