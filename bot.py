@@ -1,16 +1,19 @@
 import requests
 import os
 import time
+import sys
 from datetime import datetime
 
-# --- CONFIGURAZIONE ---
+# --- CONFIGURAZIONE SICURA ---
+# Legge dai Secrets di GitHub per sicurezza
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-if not TELEGRAM_TOKEN:
-    TELEGRAM_TOKEN = "8504447951:AAHkFvYwK_A2k76gendESC41-a2u03pQ7-c"
-if not CHAT_ID:
-    CHAT_ID = "211228574"
+# Se non trova i secrets, si ferma (Sicurezza)
+if not TELEGRAM_TOKEN or not CHAT_ID:
+    print("❌ ERRORE: Token o Chat ID mancanti.")
+    print("Imposta i 'Repository Secrets' su GitHub.")
+    sys.exit(1)
 
 CRYPTO_IDS = ["bitcoin", "ethereum", "solana", "ripple", "cardano", "polkadot"]
 VALUTA = "eur"
@@ -28,14 +31,13 @@ def get_fear_and_greed():
         return None
 
 def generate_sparkline(prices):
-    """Crea un grafico testuale 7 giorni su riga dedicata"""
+    """Crea un grafico testuale 7 giorni"""
     if not prices: return ""
     recent_prices = prices[-7:]
     min_p = min(recent_prices)
     max_p = max(recent_prices)
     if max_p == min_p: return "───────"
     
-    # Set di caratteri per il grafico (stile barre verticali)
     bars = u"  ▂▃▄▅▆▇█"
     sparkline = ""
     for p in recent_prices:
@@ -60,6 +62,7 @@ def get_current_prices():
         return None
 
 def get_market_data(crypto_id):
+    """Scarica 60 giorni per analisi Trend e RSI"""
     url = f"https://api.coingecko.com/api/v3/coins/{crypto_id}/market_chart"
     params = {
         "vs_currency": VALUTA,
@@ -109,7 +112,7 @@ def send_telegram_message(message):
         print(f"Errore Telegram: {e}")
 
 def main():
-    print("Inizio analisi 6.1 (Clean)...")
+    print("Inizio analisi 8.1 (No Wallet)...")
     prices_data = get_current_prices()
     fg_value = get_fear_and_greed()
     
@@ -117,16 +120,15 @@ def main():
 
     now = datetime.now().strftime("%d/%m %H:%M")
     
-    # Intestazione
+    # Intestazione con Sentiment
     message = f"🤖 **Advisor Crypto** ({now})\n"
     if fg_value:
-        # Definiamo l'emoji del sentiment generale
         if fg_value >= 75: fg_msg = "🤑 Extreme Greed"
         elif fg_value >= 55: fg_msg = "😋 Greed"
         elif fg_value <= 25: fg_msg = "😱 Extreme Fear"
         elif fg_value <= 45: fg_msg = "😨 Fear"
         else: fg_msg = "😐 Neutral"
-        message += f"🧠 Sentiment Mercato: *{fg_msg} ({fg_value})*\n"
+        message += f"🧠 Sentiment: *{fg_msg} ({fg_value})*\n"
     
     message += "----------------------------\n"
 
@@ -145,7 +147,7 @@ def main():
             trend_text = "Incerto"
             
             if rsi is not None:
-                # Logica Trend SMA
+                # Logica Trend SMA (Prezzo vs Media 60gg)
                 if price > sma:
                     trend_text = "🐂 Bull (Sale)"
                     is_bullish = True
@@ -153,7 +155,7 @@ def main():
                     trend_text = "🐻 Bear (Scende)"
                     is_bullish = False
 
-                # Logica Consigli Advisor
+                # Logica Consigli Advisor basata su RSI
                 if rsi <= 30:
                     if is_bullish: action_text = "💎 COMPRA ORA (Strong Buy)"
                     else: action_text = "⚠️ ACCUMULA (Buy the Dip)"
@@ -162,10 +164,10 @@ def main():
                 elif rsi <= 40: action_text = "👀 MONITORARE (Quasi Buy)"
                 else: action_text = "💤 HODL / Tieni (Neutro)"
 
-            # --- FORMATTAZIONE PULITA (Stile V5 + Grafico sotto) ---
+            # --- FORMATTAZIONE PULITA (Senza Wallet) ---
             message += f"🔹 *{crypto.capitalize()}*\n"
             message += f"💶 € {price:,.2f} ({trend_emoji} {change_24h:+.2f}%)\n"
-            message += f"📉 Grafico 7gg: `{sparkline}`\n" # Grafico qui, separato
+            message += f"📉 Grafico 7gg: `{sparkline}`\n" 
             message += f"📊 Trend 60gg: {trend_text}\n"
             message += f"⚙️ RSI: {rsi:.0f}/100\n"
             message += f"💡 **{action_text}**\n\n"
