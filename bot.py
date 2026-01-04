@@ -16,39 +16,32 @@ CRYPTO_IDS = ["bitcoin", "ethereum", "solana", "ripple", "cardano", "polkadot"]
 VALUTA = "eur"
 
 def get_fear_and_greed():
-    """Scarica l'indice di Paura e Avidità del mercato"""
+    """Scarica l'indice di Paura e Avidità"""
     url = "https://api.alternative.me/fng/"
     try:
         response = requests.get(url)
         data = response.json()
         value = int(data['data'][0]['value'])
-        classification = data['data'][0]['value_classification']
-        return value, classification
+        return value
     except Exception as e:
         print(f"Errore Fear&Greed: {e}")
-        return None, None
+        return None
 
 def generate_sparkline(prices):
-    """Crea un mini-grafico testuale degli ultimi 7 giorni"""
+    """Crea un grafico testuale 7 giorni su riga dedicata"""
     if not prices: return ""
-    
-    # Prendiamo solo gli ultimi 7 giorni per il grafico visivo
     recent_prices = prices[-7:]
-    
     min_p = min(recent_prices)
     max_p = max(recent_prices)
     if max_p == min_p: return "───────"
     
-    # Caratteri unicode per il grafico
+    # Set di caratteri per il grafico (stile barre verticali)
     bars = u"  ▂▃▄▅▆▇█"
     sparkline = ""
-    
     for p in recent_prices:
-        # Normalizza il prezzo tra 0 e 8 (indice dei caratteri)
         idx = int((p - min_p) / (max_p - min_p) * 8)
         if idx > 8: idx = 8
         sparkline += bars[idx]
-        
     return sparkline
 
 def get_current_prices():
@@ -73,7 +66,6 @@ def get_market_data(crypto_id):
         "days": "60", 
         "interval": "daily"
     }
-    
     try:
         response = requests.get(url, params=params)
         response.raise_for_status()
@@ -82,13 +74,9 @@ def get_market_data(crypto_id):
         
         if len(prices) < 60: return None, None, ""
 
-        # 1. Grafico (Sparkline)
         sparkline = generate_sparkline(prices)
-
-        # 2. SMA 60
         sma = sum(prices[-60:]) / 60
         
-        # 3. RSI 14
         prices_14 = prices[-15:] 
         deltas = [prices_14[i+1] - prices_14[i] for i in range(len(prices_14)-1)]
         gains = [d for d in deltas if d > 0]
@@ -121,25 +109,25 @@ def send_telegram_message(message):
         print(f"Errore Telegram: {e}")
 
 def main():
-    print("Inizio analisi 6.0...")
+    print("Inizio analisi 6.1 (Clean)...")
     prices_data = get_current_prices()
-    fg_value, fg_text = get_fear_and_greed()
+    fg_value = get_fear_and_greed()
     
     if not prices_data: return
 
     now = datetime.now().strftime("%d/%m %H:%M")
     
-    # Header con Fear & Greed Index
-    fg_emoji = "😐"
+    # Intestazione
+    message = f"🤖 **Advisor Crypto** ({now})\n"
     if fg_value:
-        if fg_value >= 75: fg_emoji = "🤑 Extreme Greed"
-        elif fg_value >= 55: fg_emoji = "😋 Greed"
-        elif fg_value <= 25: fg_emoji = "😱 Extreme Fear"
-        elif fg_value <= 45: fg_emoji = "😨 Fear"
+        # Definiamo l'emoji del sentiment generale
+        if fg_value >= 75: fg_msg = "🤑 Extreme Greed"
+        elif fg_value >= 55: fg_msg = "😋 Greed"
+        elif fg_value <= 25: fg_msg = "😱 Extreme Fear"
+        elif fg_value <= 45: fg_msg = "😨 Fear"
+        else: fg_msg = "😐 Neutral"
+        message += f"🧠 Sentiment Mercato: *{fg_msg} ({fg_value})*\n"
     
-    message = f"🤖 **Crypto Pro Report** ({now})\n"
-    if fg_value:
-        message += f"🧠 Sentiment: **{fg_value}** - {fg_emoji}\n"
     message += "----------------------------\n"
 
     for crypto in CRYPTO_IDS:
@@ -154,33 +142,36 @@ def main():
 
             trend_emoji = "🟢" if change_24h >= 0 else "🔴"
             action_text = "N/D"
-            trend_icon = "➖"
+            trend_text = "Incerto"
             
             if rsi is not None:
-                # Logica Trend
+                # Logica Trend SMA
                 if price > sma:
-                    trend_icon = "🐂 Bull"
+                    trend_text = "🐂 Bull (Sale)"
                     is_bullish = True
                 else:
-                    trend_icon = "🐻 Bear"
+                    trend_text = "🐻 Bear (Scende)"
                     is_bullish = False
 
-                # Logica Consigli
+                # Logica Consigli Advisor
                 if rsi <= 30:
-                    if is_bullish: action_text = "💎 BUY (Strong)"
-                    else: action_text = "⚠️ ACCUMULA (Dip)"
-                elif rsi >= 70: action_text = "🔥 VENDI (High)"
-                elif rsi >= 60: action_text = "✋ ASPETTA"
-                elif rsi <= 40: action_text = "👀 WATCH"
-                else: action_text = "💤 HODL"
+                    if is_bullish: action_text = "💎 COMPRA ORA (Strong Buy)"
+                    else: action_text = "⚠️ ACCUMULA (Buy the Dip)"
+                elif rsi >= 70: action_text = "🔥 VENDI / PRENDI PROFITTO"
+                elif rsi >= 60: action_text = "✋ ASPETTA (Prezzo Altino)"
+                elif rsi <= 40: action_text = "👀 MONITORARE (Quasi Buy)"
+                else: action_text = "💤 HODL / Tieni (Neutro)"
 
-            message += f"🔹 *{crypto.capitalize()}* {sparkline}\n"
+            # --- FORMATTAZIONE PULITA (Stile V5 + Grafico sotto) ---
+            message += f"🔹 *{crypto.capitalize()}*\n"
             message += f"💶 € {price:,.2f} ({trend_emoji} {change_24h:+.2f}%)\n"
-            message += f"📊 Trend: {trend_icon} | RSI: {rsi:.0f}\n"
+            message += f"📉 Grafico 7gg: `{sparkline}`\n" # Grafico qui, separato
+            message += f"📊 Trend 60gg: {trend_text}\n"
+            message += f"⚙️ RSI: {rsi:.0f}/100\n"
             message += f"💡 **{action_text}**\n\n"
     
     send_telegram_message(message)
-    print("Finito.")
+    print("Report inviato.")
 
 if __name__ == "__main__":
     main()
