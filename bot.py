@@ -3,11 +3,10 @@ import os
 from datetime import datetime
 
 # --- CONFIGURAZIONE ---
-# Leggiamo i dati dalle "variabili segrete" di GitHub per sicurezza
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-# Se non trova le variabili (es. test locale), usa quelli che mi hai dato
+# Fallback per test locale (i tuoi dati)
 if not TELEGRAM_TOKEN:
     TELEGRAM_TOKEN = "8504447951:AAHkFvYwK_A2k76gendESC41-a2u03pQ7-c"
 if not CHAT_ID:
@@ -20,7 +19,8 @@ def get_prices():
     url = "https://api.coingecko.com/api/v3/simple/price"
     params = {
         "ids": ",".join(CRYPTO_IDS),
-        "vs_currencies": VALUTA
+        "vs_currencies": VALUTA,
+        "include_24hr_change": "true" # ABBIAMO AGGIUNTO QUESTO
     }
     try:
         response = requests.get(url, params=params)
@@ -37,20 +37,36 @@ def send_telegram_message(message):
         "text": message,
         "parse_mode": "Markdown"
     }
-    requests.post(url, json=payload)
+    # Usiamo la versione con print per debug, utile se ci sono problemi
+    try:
+        response = requests.post(url, json=payload)
+        print(f"Telegram status: {response.status_code}")
+    except Exception as e:
+        print(f"Errore invio Telegram: {e}")
 
 def main():
     data = get_prices()
+    
     if data:
         now = datetime.now().strftime("%d/%m/%Y %H:%M")
-        message = f"📊 **Report Orario** ({now})\n\n"
+        message = f"📊 **Report Mercato** ({now})\n\n"
+        
         for crypto in CRYPTO_IDS:
             if crypto in data:
                 price = data[crypto][VALUTA]
-                message += f"🔹 *{crypto.capitalize()}:* € {price:,.2f}\n"
+                change_24h = data[crypto].get(f"{VALUTA}_24h_change", 0)
+                
+                # Scegliamo l'emoji in base al segno
+                if change_24h >= 0:
+                    emoji = "🟢"
+                else:
+                    emoji = "🔴"
+                
+                # Formattiamo: Nome: Prezzo (Emoji Percentuale%)
+                # :+.2f significa "metti sempre il segno + o - e usa 2 decimali"
+                message += f"🔹 *{crypto.capitalize()}:* € {price:,.2f} ({emoji} {change_24h:+.2f}%)\n"
         
         send_telegram_message(message)
-        print("Messaggio inviato, chiusura script.")
 
 if __name__ == "__main__":
     main()
