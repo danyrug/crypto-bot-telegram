@@ -36,7 +36,7 @@ def get_market_data(crypto_id):
     url = f"https://api.coingecko.com/api/v3/coins/{crypto_id}/market_chart"
     params = {
         "vs_currency": VALUTA,
-        "days": "60", # --- CAMBIATO A 60 GIORNI ---
+        "days": "60", 
         "interval": "daily"
     }
     
@@ -46,16 +46,11 @@ def get_market_data(crypto_id):
         data = response.json()
         prices = [x[1] for x in data['prices']]
         
-        # Ci servono almeno 60 giorni per la SMA
         if len(prices) < 60:
             return None, None
 
-        # 1. Calcolo SMA (Media Mobile Semplice a 60 giorni)
-        # Prende gli ultimi 60 prezzi e fa la media
         sma = sum(prices[-60:]) / 60
         
-        # 2. Calcolo RSI (Standard a 14 periodi)
-        # Usiamo solo gli ultimi 15 giorni dei 60 scaricati per l'RSI corrente
         prices_14 = prices[-15:] 
         deltas = [prices_14[i+1] - prices_14[i] for i in range(len(prices_14)-1)]
         gains = [d for d in deltas if d > 0]
@@ -90,14 +85,14 @@ def send_telegram_message(message):
         print(f"Errore Telegram: {e}")
 
 def main():
-    print("Inizio analisi 60gg...")
+    print("Inizio analisi Advisor...")
     prices_data = get_current_prices()
     
     if not prices_data:
         return
 
     now = datetime.now().strftime("%d/%m %H:%M")
-    message = f"📊 **Analisi Medio Termine (60gg)**\n📅 {now}\n"
+    message = f"🤖 **Advisor Crypto** ({now})\n"
     message += "----------------------------\n"
 
     for crypto in CRYPTO_IDS:
@@ -105,7 +100,6 @@ def main():
             price = prices_data[crypto][VALUTA]
             change_24h = prices_data[crypto].get(f"{VALUTA}_24h_change", 0)
             
-            # Pausa Anti-Blocco (15 sec)
             print(f"Analizzo {crypto}...") 
             time.sleep(15) 
             
@@ -113,33 +107,38 @@ def main():
 
             trend_emoji = "🟢" if change_24h >= 0 else "🔴"
             
-            signal_text = ""
-            trend_icon = "➖" # Icona neutra di default
+            action_text = "N/D"
+            trend_icon = "➖"
             
             if rsi is not None and sma is not None:
-                # Determina il Trend di fondo (Prezzo vs Media 60gg)
+                # 1. Definisci il Trend
                 if price > sma:
-                    trend_msg = "Bullish (Rialzista)"
-                    trend_icon = "🐂"
+                    trend_icon = "🐂 Bull (Sale)"
+                    is_bullish = True
                 else:
-                    trend_msg = "Bearish (Ribassista)"
-                    trend_icon = "🐻"
+                    trend_icon = "🐻 Bear (Scende)"
+                    is_bullish = False
 
-                # Genera Segnali Combinati
-                # Logica: Comprare quando l'RSI è basso MA il trend a 60gg è ancora rialzista
-                if rsi <= 30 and price > sma:
-                    signal_text = f"\n💎 **GOLDEN OPPORTUNITY**\n(Prezzo in salita sul lungo, ma in sconto oggi)"
-                elif rsi <= 30 and price < sma:
-                    signal_text = f"\n⚠️ **Attenzione**\n(Prezzo basso, ma trend negativo)"
+                # 2. Definisci l'Azione (Consiglio)
+                if rsi <= 30:
+                    if is_bullish:
+                        action_text = "💎 COMPRA ORA (Strong Buy)"
+                    else:
+                        action_text = "⚠️ ACCUMULA (Buy the Dip)"
                 elif rsi >= 70:
-                    signal_text = f"\n🔥 **Prezzo Alto**\n(Probabile discesa a breve)"
+                    action_text = "🔥 VENDI / PRENDI PROFITTO"
+                elif rsi >= 60:
+                     action_text = "✋ ASPETTA (Prezzo Altino)"
+                elif rsi <= 40:
+                     action_text = "👀 MONITORARE (Quasi Buy)"
                 else:
-                    signal_text = f"\n⚙️ RSI: {rsi:.0f} | Trend: {trend_icon}"
+                    action_text = "💤 HODL / Tieni (Neutro)"
 
             message += f"🔹 *{crypto.capitalize()}*\n"
             message += f"💶 € {price:,.2f} ({trend_emoji} {change_24h:+.2f}%)\n"
-            message += f"📊 Media 60gg: € {sma:,.2f}"
-            message += f"{signal_text}\n\n"
+            message += f"📊 Trend: {trend_icon}\n"
+            message += f"⚙️ RSI: {rsi:.0f}/100\n"
+            message += f"💡 **{action_text}**\n\n"
     
     send_telegram_message(message)
     print("Report inviato.")
