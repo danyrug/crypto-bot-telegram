@@ -1,12 +1,13 @@
 import requests
 import os
+import time
 from datetime import datetime
 
 # --- CONFIGURAZIONE ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-# Fallback per test locale (i tuoi dati)
+# Fallback per test locale
 if not TELEGRAM_TOKEN:
     TELEGRAM_TOKEN = "8504447951:AAHkFvYwK_A2k76gendESC41-a2u03pQ7-c"
 if not CHAT_ID:
@@ -15,19 +16,61 @@ if not CHAT_ID:
 CRYPTO_IDS = ["bitcoin", "ethereum", "solana", "ripple", "cardano", "polkadot"]
 VALUTA = "eur"
 
-def get_prices():
+def get_current_prices():
+    """Recupera i prezzi attuali e la variazione 24h"""
     url = "https://api.coingecko.com/api/v3/simple/price"
     params = {
         "ids": ",".join(CRYPTO_IDS),
         "vs_currencies": VALUTA,
-        "include_24hr_change": "true" # ABBIAMO AGGIUNTO QUESTO
+        "include_24hr_change": "true"
     }
     try:
         response = requests.get(url, params=params)
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        print(f"Errore API: {e}")
+        print(f"Errore prezzi correnti: {e}")
+        return None
+
+def get_rsi(crypto_id):
+    """Calcola l'RSI a 14 giorni recuperando lo storico"""
+    url = f"https://api.coingecko.com/api/v3/coins/{crypto_id}/market_chart"
+    params = {
+        "vs_currency": VALUTA,
+        "days": "14",
+        "interval": "daily"
+    }
+    
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        prices = [x[1] for x in data['prices']]
+        
+        # Se non abbiamo abbastanza dati, usciamo
+        if len(prices) < 14:
+            return None
+
+        # Calcolo RSI (Formula standard)
+        deltas = [prices[i+1] - prices[i] for i in range(len(prices)-1)]
+        gains = [d for d in deltas if d > 0]
+        losses = [-d for d in deltas if d < 0]
+
+        if len(losses) == 0:
+            return 100 # Prezzo sempre salito
+        if len(gains) == 0:
+            return 0   # Prezzo sempre sceso
+
+        avg_gain = sum(gains) / 14
+        avg_loss = sum(losses) / 14
+        
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        return rsi
+
+    except Exception as e:
+        print(f"Errore RSI per {crypto_id}: {e}")
         return None
 
 def send_telegram_message(message):
@@ -37,36 +80,52 @@ def send_telegram_message(message):
         "text": message,
         "parse_mode": "Markdown"
     }
-    # Usiamo la versione con print per debug, utile se ci sono problemi
     try:
-        response = requests.post(url, json=payload)
-        print(f"Telegram status: {response.status_code}")
+        requests.post(url, json=payload)
     except Exception as e:
-        print(f"Errore invio Telegram: {e}")
+        print(f"Errore Telegram: {e}")
 
 def main():
-    data = get_prices()
+    print("Inizio analisi di mercato...")
+    prices_data = get_current_prices()
     
-    if data:
-        now = datetime.now().strftime("%d/%m/%Y %H:%M")
-        message = f"📊 **Report Mercato** ({now})\n\n"
-        
-        for crypto in CRYPTO_IDS:
-            if crypto in data:
-                price = data[crypto][VALUTA]
-                change_24h = data[crypto].get(f"{VALUTA}_24h_change", 0)
-                
-                # Scegliamo l'emoji in base al segno
-                if change_24h >= 0:
-                    emoji = "🟢"
+    if not prices_data:
+        return
+
+    now = datetime.now().strftime("%d/%m %H:%M")
+    message = f"📊 **Report & Segnali** ({now})\n"
+    message += "----------------------------\n"
+
+    for crypto in CRYPTO_IDS:
+        if crypto in prices_data:
+            # Dati base
+            price = prices_data[crypto][VALUTA]
+            change_24h = prices_data[crypto].get(f"{VALUTA}_24h_change", 0)
+            
+            # Calcolo RSI (lento, facciamo una pausa)
+            rsi = get_rsi(crypto)
+            time.sleep(1) # Pausa di 1 secondo per non bloccare l'API
+            
+            # Logica Emoji Prezzo
+            emoji_trend = "🟢" if change_24h >= 0 else "🔴"
+            
+            # Logica Segnali RSI
+            rsi_text = ""
+            if rsi is not None:
+                if rsi <= 30:
+                    rsi_text = f"\n💎 **BUY SIGNAL!** RSI {rsi:.0f} (Ipervenduto)"
+                elif rsi >= 70:
+                    rsi_text = f"\n🔥 **SELL SIGNAL!** RSI {rsi:.0f} (Ipercomprato)"
                 else:
-                    emoji = "🔴"
-                
-                # Formattiamo: Nome: Prezzo (Emoji Percentuale%)
-                # :+.2f significa "metti sempre il segno + o - e usa 2 decimali"
-                message += f"🔹 *{crypto.capitalize()}:* € {price:,.2f} ({emoji} {change_24h:+.2f}%)\n"
-        
-        send_telegram_message(message)
+                    rsi_text = f" | RSI: {rsi:.0f}" # Neutro
+
+            # Composizione Messaggio
+            message += f"🔹 *{crypto.capitalize()}*\n"
+            message += f"💶 € {price:,.2f} ({emoji_trend} {change_24h:+.2f}%)"
+            message += f"{rsi_text}\n\n"
+    
+    send_telegram_message(message)
+    print("Report inviato.")
 
 if __name__ == "__main__":
     main()
