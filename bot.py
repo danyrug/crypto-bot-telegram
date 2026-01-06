@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 
 # --- CONFIGURAZIONE SICURA ---
-# Legge dai Secrets di GitHub per sicurezza
+# Legge SOLO dai Secrets di GitHub.
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
@@ -18,17 +18,38 @@ if not TELEGRAM_TOKEN or not CHAT_ID:
 CRYPTO_IDS = ["bitcoin", "ethereum", "solana", "ripple", "cardano", "polkadot"]
 VALUTA = "eur"
 
+def requests_retry_session(url, params=None, retries=3, backoff_factor=5):
+    """
+    Funzione intelligente che riprova se l'API fallisce.
+    Utile per evitare buchi nel report quando CoinGecko è sovraccarico.
+    """
+    for i in range(retries):
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            if response.status_code == 429: # Troppe richieste
+                print(f"⚠️ Rate Limit (429). Attendo {backoff_factor}s...")
+                time.sleep(backoff_factor)
+                continue
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"⚠️ Tentativo {i+1}/{retries} fallito: {e}")
+            time.sleep(backoff_factor)
+    
+    print(f"❌ Errore definitivo per {url}")
+    return None
+
 def get_fear_and_greed():
     """Scarica l'indice di Paura e Avidità"""
     url = "https://api.alternative.me/fng/"
-    try:
-        response = requests.get(url)
-        data = response.json()
-        value = int(data['data'][0]['value'])
-        return value
-    except Exception as e:
-        print(f"Errore Fear&Greed: {e}")
-        return None
+    data = requests_retry_session(url)
+    if data:
+        try:
+            value = int(data['data'][0]['value'])
+            return value
+        except:
+            return None
+    return None
 
 def generate_sparkline(prices):
     """Crea un grafico testuale 7 giorni"""
@@ -46,22 +67,27 @@ def generate_sparkline(prices):
         sparkline += bars[idx]
     return sparkline
 
-def get_current_prices():
-    url = "https://api.coingecko.com/api/v3/simple/price"
+def get_rich_market_data_list():
+    """
+    Nuova funzione: Scarica dati ricchi (Prezzo, cambio, ATH) per TUTTE le crypto insieme.
+    """
+    url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {
+        "vs_currency": VALUTA,
         "ids": ",".join(CRYPTO_IDS),
-        "vs_currencies": VALUTA,
-        "include_24hr_change": "true"
+        "order": "market_cap_desc",
+        "sparkline": "false"
     }
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        print(f"Errore prezzi correnti: {e}")
-        return None
+    data = requests_retry_session(url, params)
+    
+    # Trasformiamo la lista in un dizionario per trovarli facilmente dopo
+    market_dict = {}
+    if data:
+        for coin in data:
+            market_dict[coin['id']] = coin
+    return market_dict
 
-def get_market_data(crypto_id):
+def get_historical_analysis(crypto_id):
     """Scarica 60 giorni per analisi Trend e RSI"""
     url = f"https://api.coingecko.com/api/v3/coins/{crypto_id}/market_chart"
     params = {
@@ -69,10 +95,11 @@ def get_market_data(crypto_id):
         "days": "60", 
         "interval": "daily"
     }
+    
+    data = requests_retry_session(url, params)
+    if not data: return None, None, ""
+
     try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
         prices = [x[1] for x in data['prices']]
         
         if len(prices) < 60: return None, None, ""
@@ -94,9 +121,8 @@ def get_market_data(crypto_id):
             rsi = 100 - (100 / (1 + rs))
         
         return rsi, sma, sparkline
-
     except Exception as e:
-        print(f"Errore Dati per {crypto_id}: {e}")
+        print(f"Errore calcolo indicatori {crypto_id}: {e}")
         return None, None, ""
 
 def send_telegram_message(message):
@@ -112,20 +138,24 @@ def send_telegram_message(message):
         print(f"Errore Telegram: {e}")
 
 def main():
-    print("Inizio analisi 8.1 (No Wallet)...")
-    prices_data = get_current_prices()
+    print("Inizio analisi 9.0 (Bulletproof)...")
+    
+    # 1. Scarichiamo i dati "ricchi" (Prezzi + ATH)
+    rich_data = get_rich_market_data_list()
     fg_value = get_fear_and_greed()
     
-    if not prices_data: return
+    if not rich_data:
+        print("Impossibile recuperare i prezzi base.")
+        return
 
     now = datetime.now().strftime("%d/%m %H:%M")
     
-    # Intestazione con Sentiment
-    message = f"🤖 **Advisor Crypto** ({now})\n"
+    # Intestazione
+    message = f"🤖 **Advisor Pro** ({now})\n"
     if fg_value:
-        if fg_value >= 75: fg_msg = "🤑 Extreme Greed"
+        if fg_value >= 75: fg_msg = "🤑 Greed"
         elif fg_value >= 55: fg_msg = "😋 Greed"
-        elif fg_value <= 25: fg_msg = "😱 Extreme Fear"
+        elif fg_value <= 25: fg_msg = "😱 Fear"
         elif fg_value <= 45: fg_msg = "😨 Fear"
         else: fg_msg = "😐 Neutral"
         message += f"🧠 Sentiment: *{fg_msg} ({fg_value})*\n"
@@ -133,44 +163,56 @@ def main():
     message += "----------------------------\n"
 
     for crypto in CRYPTO_IDS:
-        if crypto in prices_data:
-            price = prices_data[crypto][VALUTA]
-            change_24h = prices_data[crypto].get(f"{VALUTA}_24h_change", 0)
+        # Se la moneta non è nei dati scaricati, la saltiamo
+        if crypto not in rich_data:
+            continue
             
-            print(f"Analizzo {crypto}...") 
-            time.sleep(15) 
-            
-            rsi, sma, sparkline = get_market_data(crypto)
+        coin_data = rich_data[crypto]
+        price = coin_data['current_price']
+        change_24h = coin_data.get('price_change_percentage_24h', 0)
+        ath_change = coin_data.get('ath_change_percentage', 0) # Distanza dal record storico
+        
+        print(f"Analizzo {crypto}...") 
+        # Pausa intelligente: abbiamo già i prezzi, ma per RSI/SMA serve lo storico
+        # CoinGecko è severo, manteniamo la pausa
+        time.sleep(15) 
+        
+        rsi, sma, sparkline = get_historical_analysis(crypto)
 
-            trend_emoji = "🟢" if change_24h >= 0 else "🔴"
-            action_text = "N/D"
-            trend_text = "Incerto"
-            
-            if rsi is not None:
-                # Logica Trend SMA (Prezzo vs Media 60gg)
-                if price > sma:
-                    trend_text = "🐂 Bull (Sale)"
-                    is_bullish = True
-                else:
-                    trend_text = "🐻 Bear (Scende)"
-                    is_bullish = False
+        trend_emoji = "🟢" if change_24h >= 0 else "🔴"
+        action_text = "N/D"
+        trend_text = "Incerto"
+        
+        if rsi is not None:
+            # Logica Trend SMA
+            if price > sma:
+                trend_text = "🐂 Bull (Sale)"
+                is_bullish = True
+            else:
+                trend_text = "🐻 Bear (Scende)"
+                is_bullish = False
 
-                # Logica Consigli Advisor basata su RSI
-                if rsi <= 30:
-                    if is_bullish: action_text = "💎 COMPRA ORA (Strong Buy)"
-                    else: action_text = "⚠️ ACCUMULA (Buy the Dip)"
-                elif rsi >= 70: action_text = "🔥 VENDI / PRENDI PROFITTO"
-                elif rsi >= 60: action_text = "✋ ASPETTA (Prezzo Altino)"
-                elif rsi <= 40: action_text = "👀 MONITORARE (Quasi Buy)"
-                else: action_text = "💤 HODL / Tieni (Neutro)"
+            # Logica Consigli Advisor
+            if rsi <= 30:
+                if is_bullish: action_text = "💎 COMPRA (Strong)"
+                else: action_text = "⚠️ ACCUMULA (Dip)"
+            elif rsi >= 70: action_text = "🔥 VENDI (High)"
+            elif rsi >= 60: action_text = "✋ ASPETTA"
+            elif rsi <= 40: action_text = "👀 MONITORARE"
+            else: action_text = "💤 HODL"
 
-            # --- FORMATTAZIONE PULITA (Senza Wallet) ---
-            message += f"🔹 *{crypto.capitalize()}*\n"
-            message += f"💶 € {price:,.2f} ({trend_emoji} {change_24h:+.2f}%)\n"
-            message += f"📉 Grafico 7gg: `{sparkline}`\n" 
-            message += f"📊 Trend 60gg: {trend_text}\n"
-            message += f"⚙️ RSI: {rsi:.0f}/100\n"
-            message += f"💡 **{action_text}**\n\n"
+        # --- FORMATTAZIONE AVANZATA ---
+        message += f"🔹 *{crypto.capitalize()}*\n"
+        message += f"💶 € {price:,.2f} ({trend_emoji} {change_24h:+.2f}%)\n"
+        
+        # NUOVA RIGA: Distanza dal massimo storico
+        # Se ath_change è -15%, significa che siamo sotto del 15% dal record
+        message += f"🏔️ Dal Max: `{ath_change:.2f}%`\n"
+        
+        message += f"📉 Grafico 7gg: `{sparkline}`\n" 
+        message += f"📊 Trend 60gg: {trend_text}\n"
+        message += f"⚙️ RSI: {rsi:.0f}/100\n"
+        message += f"💡 **{action_text}**\n\n"
     
     send_telegram_message(message)
     print("Report inviato.")
